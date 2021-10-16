@@ -70,8 +70,8 @@ pub const JsonTextIterator = struct {
             .data = self.data,
             .pos = 0,
         };
-        var count = 0;
-        while(temp_itr.next()) {
+        var count: usize = 0;
+        while (temp_iter.next() != null) {
             count += 1;
         }
         return count;
@@ -125,6 +125,7 @@ test "array iterator" {
     try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 3 else unreachable);
     try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 4 else unreachable);
     try testing.expect(iter.next() == null);
+    try testing.expect(iter.size() == 4);
 }
 
 pub const JsonObjectKeyValuePair = struct {
