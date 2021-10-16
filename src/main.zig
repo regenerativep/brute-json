@@ -58,7 +58,7 @@ pub const JsonTextIterator = struct {
             return null;
         }
         const next_pos = traverseBraces(self.data[self.pos..], "[{", "]}", ",") + self.pos;
-        const item_slice = mem.trim(u8, self.data[self.pos..next_pos], ascii.spaces[0..]);
+        const item_slice = self.data[self.pos..next_pos];
         self.pos = next_pos + 1;
         return item_slice;
     }
@@ -97,8 +97,8 @@ test "text iterator" {
     iter.reset();
     const next = iter.next() orelse unreachable;
     var inner_iter = JsonTextIterator{ .data = next[1 .. next.len - 1], .pos = 0 };
-    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, "some: [\"stuff\"]"));
-    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, "here: null"));
+    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, " some: [\"stuff\"]"));
+    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, " here: null "));
 }
 
 pub const JsonArrayIterator = struct {
@@ -139,8 +139,8 @@ pub const JsonObjectIterator = struct {
     pub fn next(self: *Self) ?JsonObjectKeyValuePair {
         const text = self.data.next() orelse return null;
         const colon_pos = traverseBraces(text, "[{", "]}", ":");
-        const key_str = mem.trim(u8, text[0..colon_pos], ascii.spaces[0..]);
-        const value_str = mem.trim(u8, text[colon_pos + 1 ..], ascii.spaces[0..]);
+        const key_str = text[0..colon_pos];
+        const value_str = text[colon_pos + 1 ..];
         return JsonObjectKeyValuePair{
             .key = parseJson(key_str),
             .value = parseJson(value_str),
@@ -172,23 +172,24 @@ pub const JsonValue = union(enum) {
     Object: JsonObjectIterator,
 };
 
-/// given the proviced text, parse json into a JsonValue
-fn parseJson(json_str: []const u8) JsonValue {
-    if (eql(u8, json_str, "null")) {
+/// given the provided text, parse json into a JsonValue
+pub fn parseJson(json_str: []const u8) JsonValue {
+    var trimmed_str = mem.trim(u8, json_str, ascii.spaces[0..]);
+    if (eql(u8, trimmed_str, "null")) {
         return .Null;
-    } else if (eql(u8, json_str, "true")) {
+    } else if (eql(u8, trimmed_str, "true")) {
         return .{ .Bool = true };
-    } else if (eql(u8, json_str, "false")) {
+    } else if (eql(u8, trimmed_str, "false")) {
         return .{ .Bool = false };
-    } else if (json_str[0] == '"') {
-        return .{ .String = json_str[1 .. json_str.len - 1] };
-    } else if (json_str[0] == '[') {
-        return .{ .Array = JsonArrayIterator{ .data = JsonTextIterator{ .data = json_str[1 .. json_str.len - 1] } } };
-    } else if (json_str[0] == '{') {
-        return .{ .Object = JsonObjectIterator{ .data = JsonTextIterator{ .data = json_str[1 .. json_str.len - 1] } } };
+    } else if (trimmed_str[0] == '"') {
+        return .{ .String = trimmed_str[1 .. trimmed_str.len - 1] };
+    } else if (trimmed_str[0] == '[') {
+        return .{ .Array = JsonArrayIterator{ .data = JsonTextIterator{ .data = trimmed_str[1 .. trimmed_str.len - 1] } } };
+    } else if (trimmed_str[0] == '{') {
+        return .{ .Object = JsonObjectIterator{ .data = JsonTextIterator{ .data = trimmed_str[1 .. trimmed_str.len - 1] } } };
     } else {
-        const parsed_int = std.fmt.parseInt(i64, json_str, 0) catch {
-            const parsed_float = std.fmt.parseFloat(f64, json_str) catch return .Null;
+        const parsed_int = std.fmt.parseInt(i64, trimmed_str, 0) catch {
+            const parsed_float = std.fmt.parseFloat(f64, trimmed_str) catch return .Null;
             return .{ .Number = parsed_float };
         };
         return .{ .Number = @intToFloat(f64, parsed_int) };
