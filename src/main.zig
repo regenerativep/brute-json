@@ -4,6 +4,10 @@ const mem = std.mem;
 const eql = mem.eql;
 const ascii = std.ascii;
 
+/// Finds the end index of the first section of the provided array
+/// ex: input "1, 2, 3" with until = ",", it will find index 2 since that is where the first comma is
+/// specifying up and down will make it so that until values are ignored at nested levels, or
+/// if we reach a level lower than where we started
 pub fn traverseBraces(data: []const u8, comptime up: []const u8, comptime down: []const u8, comptime until: []const u8) usize {
     var level: usize = 0;
     var i: usize = 0;
@@ -61,6 +65,17 @@ pub const JsonTextIterator = struct {
     pub fn reset(self: *Self) void {
         self.pos = 0;
     }
+    pub fn size(self: *Self) usize {
+        var temp_iter = JsonTextIterator{
+            .data = self.data,
+            .pos = 0,
+        };
+        var count = 0;
+        while(temp_itr.next()) {
+            count += 1;
+        }
+        return count;
+    }
 };
 
 test "text iterator" {
@@ -96,6 +111,9 @@ pub const JsonArrayIterator = struct {
     pub fn reset(self: *Self) void {
         self.data.reset();
     }
+    pub fn size(self: *Self) usize {
+        return self.data.size();
+    }
 };
 
 test "array iterator" {
@@ -130,6 +148,9 @@ pub const JsonObjectIterator = struct {
     pub fn reset(self: *Self) void {
         self.data.reset();
     }
+    pub fn size(self: *Self) usize {
+        return self.data.size();
+    }
 };
 
 test "object iterator" {
@@ -150,6 +171,7 @@ pub const JsonValue = union(enum) {
     Object: JsonObjectIterator,
 };
 
+/// given the proviced text, parse json into a JsonValue
 fn parseJson(json_str: []const u8) JsonValue {
     if (eql(u8, json_str, "null")) {
         return .Null;
