@@ -8,44 +8,60 @@ const ascii = std.ascii;
 /// ex: input "1, 2, 3" with until = ",", it will find index 2 since that is where the first comma is
 /// specifying up and down will make it so that until values are ignored at nested levels, or
 /// if we reach a level lower than where we started
-pub fn traverseBraces(data: []const u8, comptime up: []const u8, comptime down: []const u8, comptime until: []const u8) usize {
+pub fn traverseBraces(data: []const u8, comptime up: []const u8, comptime down: []const u8, comptime until: []const u8, comptime alt: []const u8, comptime alt_escape: u8) usize {
     var level: usize = 0;
     var i: usize = 0;
+    var in_alt: ?u8 = null;
+    var last_c: ?u8 = null;
     blk: while (i < data.len) : (i += 1) {
         const cur = data[i];
-        inline for (up) |c| {
-            if (cur == c) {
-                level += 1;
+        if (in_alt) |current_alt| {
+            if (cur == current_alt and if (last_c) |last_c_val| last_c_val != alt_escape else true) {
+                in_alt = null;
             }
-        }
-        inline for (down) |c| {
-            if (cur == c) {
-                if (level == 0) {
-                    break :blk;
-                } else {
-                    level -= 1;
-                }
-            }
-        }
-        if (level == 0) {
-            inline for (until) |c| {
+        } else {
+            inline for (alt) |c| {
                 if (cur == c) {
-                    break :blk;
+                    in_alt = c;
+                }
+            }
+            inline for (up) |c| {
+                if (cur == c) {
+                    level += 1;
+                }
+            }
+            inline for (down) |c| {
+                if (cur == c) {
+                    if (level == 0) {
+                        break :blk;
+                    } else {
+                        level -= 1;
+                    }
+                }
+            }
+            if (level == 0) {
+                inline for (until) |c| {
+                    if (cur == c) {
+                        break :blk;
+                    }
                 }
             }
         }
+        last_c = cur;
     }
     return i;
 }
 
 test "traverse braces" {
     testing.log_level = .debug;
-    try testing.expect(traverseBraces(" ", "{", "}", "") == 1);
+    try testing.expect(traverseBraces(" ", "{", "}", "", "\"'", '\\') == 1);
     const str = "some: \"hello\", stuff: [{ in: \"here\" }, { a: true }]";
-    try testing.expect(traverseBraces(str, "[{", "]}", "") == str.len);
-    try testing.expect(traverseBraces(str, "[{", "[}", ",") == 13);
+    try testing.expect(traverseBraces(str, "[{", "]}", "", "\"'", '\\') == str.len);
+    try testing.expect(traverseBraces(str, "[{", "]}", ",", "\"'", '\\') == 13);
     const slice = str[14..];
-    try testing.expect(traverseBraces(slice, "[{", "]}", ",") == slice.len);
+    try testing.expect(traverseBraces(slice, "[{", "]}", ",", "\"'", '\\') == slice.len);
+
+    try testing.expect(traverseBraces("\"hello\": \"ther,e}\", \"person\": null", "[{", "]}", ",", "\"'", '\\') == 18);
 }
 
 pub const JsonTextIterator = struct {
@@ -57,7 +73,7 @@ pub const JsonTextIterator = struct {
         if (self.pos >= self.data.len) {
             return null;
         }
-        const next_pos = traverseBraces(self.data[self.pos..], "[{", "]}", ",") + self.pos;
+        const next_pos = traverseBraces(self.data[self.pos..], "[{", "]}", ",", "\"'", '\\') + self.pos;
         const item_slice = self.data[self.pos..next_pos];
         self.pos = next_pos + 1;
         return item_slice;
@@ -138,7 +154,7 @@ pub const JsonObjectIterator = struct {
 
     pub fn next(self: *Self) ?JsonObjectKeyValuePair {
         const text = self.data.next() orelse return null;
-        const colon_pos = traverseBraces(text, "[{", "]}", ":");
+        const colon_pos = traverseBraces(text, "[{", "]}", ":", "\"'", '\\');
         const key_str = text[0..colon_pos];
         const value_str = text[colon_pos + 1 ..];
         return JsonObjectKeyValuePair{
