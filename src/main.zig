@@ -92,6 +92,12 @@ pub const JsonTextIterator = struct {
         }
         return count;
     }
+    pub fn clone(self: *const Self) Self {
+        return .{
+            .data = self.data,
+            .pos = self.pos,
+        };
+    }
 };
 
 test "text iterator" {
@@ -129,6 +135,11 @@ pub const JsonArrayIterator = struct {
     }
     pub fn size(self: *const Self) usize {
         return self.data.size();
+    }
+    pub fn clone(self: *const Self) Self {
+        return .{
+            .data = self.data.clone(),
+        };
     }
 };
 
@@ -170,6 +181,11 @@ pub const JsonObjectIterator = struct {
     }
     pub fn size(self: *const Self) usize {
         return self.data.size();
+    }
+    pub fn clone(self: *const Self) Self {
+        return .{
+            .data = self.data.clone(),
+        };
     }
 };
 
