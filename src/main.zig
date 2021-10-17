@@ -212,7 +212,7 @@ pub const JsonValue = union(enum) {
 
     const Self = @This();
     pub fn clone(self: *const Self) Self {
-        return switch (self) {
+        return switch (self.*) {
             .Null => .Null,
             .Bool => |val| .{ .Bool = val },
             .String => |val| .{ .String = val },
@@ -222,6 +222,12 @@ pub const JsonValue = union(enum) {
         };
     }
 };
+
+test "jsonvalue" {
+    var val: JsonValue = .{ .Null = undefined };
+    var val2 = val.clone();
+    _ = val2;
+}
 
 /// given the provided text, parse json into a JsonValue
 pub fn parseJson(json_str: []const u8) JsonValue {
