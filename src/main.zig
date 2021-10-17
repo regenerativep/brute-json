@@ -155,6 +155,9 @@ pub const JsonObjectIterator = struct {
     pub fn next(self: *Self) ?JsonObjectKeyValuePair {
         const text = self.data.next() orelse return null;
         const colon_pos = traverseBraces(text, "[{", "]}", ":", "\"'", '\\');
+        if (colon_pos >= text.len) {
+            return null;
+        }
         const key_str = text[0..colon_pos];
         const value_str = text[colon_pos + 1 ..];
         return JsonObjectKeyValuePair{
@@ -177,6 +180,10 @@ test "object iterator" {
     try testing.expect(if (iter.next()) |pair| pair.key == JsonValue.String and eql(u8, pair.key.String, "hello") and pair.value == JsonValue.String and eql(u8, pair.value.String, "there") else unreachable);
     try testing.expect(if (iter.next()) |pair| pair.key == JsonValue.String and eql(u8, pair.key.String, "test") and pair.value == JsonValue.Array else unreachable);
     try testing.expect(iter.next() == null);
+    var iter2 = JsonObjectIterator{
+        .data = JsonTextIterator{ .data = " " },
+    };
+    try testing.expect(iter2.next() == null);
 }
 
 pub const JsonValue = union(enum) {
