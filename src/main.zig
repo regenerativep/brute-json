@@ -209,6 +209,18 @@ pub const JsonValue = union(enum) {
     Number: f64,
     Array: JsonArrayIterator,
     Object: JsonObjectIterator,
+
+    const Self = @This();
+    pub fn clone(self: *const Self) Self {
+        return switch (self) {
+            .Null => .Null,
+            .Bool => |val| .{ .Bool = val },
+            .String => |val| .{ .String = val },
+            .Number => |val| .{ .Number = val },
+            .Array => |val| .{ .Array = val.clone() },
+            .Object => |val| .{ .Object = val.clone() },
+        };
+    }
 };
 
 /// given the provided text, parse json into a JsonValue
