@@ -81,7 +81,7 @@ pub const JsonTextIterator = struct {
     pub fn reset(self: *Self) void {
         self.pos = 0;
     }
-    pub fn size(self: *Self) usize {
+    pub fn size(self: *const Self) usize {
         var temp_iter = JsonTextIterator{
             .data = self.data,
             .pos = 0,
@@ -127,7 +127,7 @@ pub const JsonArrayIterator = struct {
     pub fn reset(self: *Self) void {
         self.data.reset();
     }
-    pub fn size(self: *Self) usize {
+    pub fn size(self: *const Self) usize {
         return self.data.size();
     }
 };
@@ -168,7 +168,7 @@ pub const JsonObjectIterator = struct {
     pub fn reset(self: *Self) void {
         self.data.reset();
     }
-    pub fn size(self: *Self) usize {
+    pub fn size(self: *const Self) usize {
         return self.data.size();
     }
 };
