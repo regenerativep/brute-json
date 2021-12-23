@@ -1,255 +1,350 @@
 const std = @import("std");
 const testing = std.testing;
-const mem = std.mem;
-const eql = mem.eql;
-const ascii = std.ascii;
 
-/// Finds the end index of the first section of the provided array
-/// ex: input "1, 2, 3" with until = ",", it will find index 2 since that is where the first comma is
-/// specifying up and down will make it so that until values are ignored at nested levels, or
-/// if we reach a level lower than where we started
-pub fn traverseBraces(data: []const u8, comptime up: []const u8, comptime down: []const u8, comptime until: []const u8, comptime alt: []const u8, comptime alt_escape: u8) usize {
-    var level: usize = 0;
-    var i: usize = 0;
-    var in_alt: ?u8 = null;
-    var last_c: ?u8 = null;
-    blk: while (i < data.len) : (i += 1) {
-        const cur = data[i];
-        if (in_alt) |current_alt| {
-            if (cur == current_alt and if (last_c) |last_c_val| last_c_val != alt_escape else true) {
-                in_alt = null;
+pub const JsonCharacterIterator = struct {
+    text: []const u8,
+    pos: usize = 0,
+    closer: u8 = '"',
+
+    pub const JsonCharacterIteratorError = error{
+        InvalidEscapeSequence,
+        InvalidCloser,
+    };
+
+    const Self = @This();
+    pub fn next(self: *Self) JsonCharacterIteratorError!?u8 {
+        if (self.pos == 0 and self.text.len > 0) {
+            if (self.text[self.pos] == '\'') {
+                self.closer = '\'';
+            } else if (self.text[self.pos] != '"') {
+                return JsonCharacterIteratorError.InvalidCloser;
             }
-        } else {
-            inline for (alt) |c| {
-                if (cur == c) {
-                    in_alt = c;
+            self.pos += 1;
+        }
+        if (self.pos >= self.text.len) {
+            return null;
+        }
+        if (self.text[self.pos] == '\\') {
+            if (self.pos + 1 <= self.text.len) {
+                self.pos += 1;
+                const c = self.text[self.pos];
+                self.pos += 1;
+                switch (c) {
+                    'b' => return 0x8,
+                    'f' => return 0xC,
+                    'n' => return '\n',
+                    'r' => return '\r',
+                    't' => return '\t',
+                    '\'' => return '\'',
+                    '"' => return '"',
+                    '\\' => return '\\',
+                    '\n' => {},
+                    //'u' => {
+                    //},
+                    else => return JsonCharacterIteratorError.InvalidEscapeSequence,
                 }
-            }
-            inline for (up) |c| {
-                if (cur == c) {
-                    level += 1;
+                if (self.pos + 1 >= self.text.len) {
+                    return null;
                 }
+            } else {
+                return null;
             }
-            inline for (down) |c| {
-                if (cur == c) {
+        }
+        const c = self.text[self.pos];
+        self.pos += 1;
+        if (c == self.closer) {
+            return null;
+        }
+        return c;
+    }
+};
+
+test "json character iterator" {
+    var iter = JsonCharacterIterator{ .text = "\"hi\\nt\\\"\"a" };
+    try testing.expect((try iter.next()).? == 'h');
+    try testing.expect((try iter.next()).? == 'i');
+    try testing.expect((try iter.next()).? == '\n');
+    try testing.expect((try iter.next()).? == 't');
+    try testing.expect((try iter.next()).? == '"');
+    try testing.expect((try iter.next()) == null);
+}
+
+pub const JsonToken = union(enum) {
+    OpenCurly,
+    CloseCurly,
+    OpenBracket,
+    CloseBracket,
+    String: []const u8,
+    Colon,
+    Comma,
+    Number: f64,
+    Boolean: bool,
+    Null,
+};
+
+pub fn partStrEql(text: []const u8, test_str: []const u8) bool {
+    if (text.len >= test_str.len) {
+        return std.mem.eql(u8, text[0..test_str.len], test_str);
+    }
+    return false;
+}
+
+pub const JsonTokenIterator = struct {
+    text: []const u8,
+    pos: usize = 0,
+    peeked_value: ?(JsonTokenIteratorError!?JsonToken) = null,
+
+    pub const JsonTokenIteratorError = JsonCharacterIterator.JsonCharacterIteratorError || error{
+        InvalidToken,
+    };
+
+    const Self = @This();
+    pub fn next(self: *Self) JsonTokenIteratorError!?JsonToken {
+        if (self.peeked_value) |val| {
+            self.peeked_value = null;
+            return (try val) orelse return null; // for some reason zig wont let me just return val
+        }
+        while (self.pos < self.text.len and std.ascii.isSpace(self.text[self.pos])) : (self.pos += 1) {}
+        if (self.pos >= self.text.len) {
+            return null;
+        }
+        switch (self.text[self.pos]) {
+            '{' => {
+                self.pos += 1;
+                return .OpenCurly;
+            },
+            '}' => {
+                self.pos += 1;
+                return .CloseCurly;
+            },
+            '[' => {
+                self.pos += 1;
+                return .OpenBracket;
+            },
+            ']' => {
+                self.pos += 1;
+                return .CloseBracket;
+            },
+            ':' => {
+                self.pos += 1;
+                return .Colon;
+            },
+            ',' => {
+                self.pos += 1;
+                return .Comma;
+            },
+            '"', '\'' => {
+                var iter = JsonCharacterIterator{ .text = self.text[self.pos..] };
+                while ((try iter.next()) != null) {}
+                const start = self.pos;
+                self.pos += iter.pos;
+                return JsonToken{ .String = self.text[start..self.pos] };
+            },
+            else => {
+                if (partStrEql(self.text[self.pos..], "false")) {
+                    self.pos += ("false").len;
+                    return JsonToken{ .Boolean = false };
+                } else if (partStrEql(self.text[self.pos..], "true")) {
+                    self.pos += ("true").len;
+                    return JsonToken{ .Boolean = true };
+                } else if (partStrEql(self.text[self.pos..], "null")) {
+                    self.pos += ("null").len;
+                    return JsonToken.Null;
+                } else {
+                    const start = self.pos;
+                    while (self.pos < self.text.len and (std.ascii.isDigit(self.text[self.pos]) or self.text[self.pos] == '.' or self.text[self.pos] == '-')) : (self.pos += 1) {}
+                    return JsonToken{ .Number = std.fmt.parseFloat(f64, self.text[start..self.pos]) catch return JsonTokenIteratorError.InvalidToken };
+                }
+            },
+        }
+    }
+    pub fn peek(self: *Self) JsonTokenIteratorError!?JsonToken {
+        const val = self.peeked_value orelse self.next();
+        self.peeked_value = val;
+        return val;
+    }
+
+    // assumse that first opening bracket/curly has already been read
+    pub fn untilSameLevel(self: *Self) !void {
+        var level: usize = 0;
+        while (try self.next()) |token| {
+            switch (token) {
+                .OpenCurly, .OpenBracket => level += 1,
+                .CloseCurly, .CloseBracket => {
                     if (level == 0) {
-                        break :blk;
+                        return;
                     } else {
                         level -= 1;
                     }
-                }
-            }
-            if (level == 0) {
-                inline for (until) |c| {
-                    if (cur == c) {
-                        break :blk;
-                    }
-                }
+                },
+                else => {},
             }
         }
-        last_c = cur;
     }
-    return i;
-}
-
-test "traverse braces" {
-    testing.log_level = .debug;
-    try testing.expect(traverseBraces(" ", "{", "}", "", "\"'", '\\') == 1);
-    const str = "some: \"hello\", stuff: [{ in: \"here\" }, { a: true }]";
-    try testing.expect(traverseBraces(str, "[{", "]}", "", "\"'", '\\') == str.len);
-    try testing.expect(traverseBraces(str, "[{", "]}", ",", "\"'", '\\') == 13);
-    const slice = str[14..];
-    try testing.expect(traverseBraces(slice, "[{", "]}", ",", "\"'", '\\') == slice.len);
-
-    try testing.expect(traverseBraces("\"hello\": \"ther,e}\", \"person\": null", "[{", "]}", ",", "\"'", '\\') == 18);
-}
-
-pub const JsonTextIterator = struct {
-    data: []const u8,
-    pos: usize = 0,
-
-    const Self = @This();
-    pub fn next(self: *Self) ?[]const u8 {
-        if (self.pos >= self.data.len) {
-            return null;
-        }
-        const next_pos = traverseBraces(self.data[self.pos..], "[{", "]}", ",", "\"'", '\\') + self.pos;
-        const item_slice = self.data[self.pos..next_pos];
-        self.pos = next_pos + 1;
-        return item_slice;
-    }
-    pub fn reset(self: *Self) void {
-        self.pos = 0;
-    }
-    pub fn size(self: *const Self) usize {
-        var temp_iter = JsonTextIterator{
-            .data = self.data,
-            .pos = 0,
-        };
-        var count: usize = 0;
-        while (temp_iter.next() != null) {
-            count += 1;
-        }
-        return count;
-    }
-    pub fn clone(self: *const Self) Self {
-        return .{
-            .data = self.data,
-            .pos = self.pos,
-        };
+    pub fn clone(self: *Self) JsonTokenIterator {
+        return .{ .text = self.text, .pos = self.pos };
     }
 };
 
-test "text iterator" {
-    testing.log_level = .debug;
-    var iter = JsonTextIterator{
-        .data = "{}",
-        .pos = 0,
+test "token iterator" {
+    var iter = JsonTokenIterator{ .text = 
+    \\{
+    \\  "hi": [
+    \\    "there",
+    \\    "person",
+    \\    false
+    \\  ]
+    \\}
     };
-    var next_item = iter.next();
-    try testing.expect(next_item != null);
-    if (next_item) |item| {
-        try testing.expect(eql(u8, item, "{}"));
-    }
-    iter = JsonTextIterator{
-        .data = "{ some: [\"stuff\"], here: null }",
-        .pos = 0,
-    };
-    try testing.expect(eql(u8, iter.next() orelse unreachable, "{ some: [\"stuff\"], here: null }"));
-    iter.reset();
-    const next = iter.next() orelse unreachable;
-    var inner_iter = JsonTextIterator{ .data = next[1 .. next.len - 1], .pos = 0 };
-    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, " some: [\"stuff\"]"));
-    try testing.expect(eql(u8, inner_iter.next() orelse unreachable, " here: null "));
+    try testing.expect((try iter.next()).? == .OpenCurly);
+    try testing.expect(std.mem.eql(u8, (try iter.next()).?.String, "\"hi\""));
+    try testing.expect((try iter.next()).? == .Colon);
+    try testing.expect((try iter.next()).? == .OpenBracket);
+    try testing.expect(std.mem.eql(u8, (try iter.next()).?.String, "\"there\""));
+    try testing.expect((try iter.next()).? == .Comma);
+    try testing.expect(std.mem.eql(u8, (try iter.next()).?.String, "\"person\""));
+    try testing.expect((try iter.next()).? == .Comma);
+    try testing.expect((try iter.next()).?.Boolean == false);
+    try testing.expect((try iter.next()).? == .CloseBracket);
+    try testing.expect((try iter.next()).? == .CloseCurly);
+    try testing.expect((try iter.next()) == null);
 }
+
+pub const JsonObjectIterator = struct {
+    tokens: JsonTokenIterator,
+    first: bool = true,
+
+    pub const JsonObjectPair = struct {
+        key: JsonValue,
+        value: JsonValue,
+    };
+    const Self = @This();
+    pub fn next(self: *Self) !?JsonObjectPair {
+        const token = (try self.tokens.peek()) orelse return null;
+        if (token == .CloseCurly) {
+            return null;
+        }
+        if (self.first) {
+            self.first = false;
+        } else {
+            if (token == .Comma) {
+                _ = try self.tokens.next();
+            }
+        }
+        const key = (try JsonValue.parseFromIterator(&self.tokens)) orelse return null;
+        if (key != .String) {
+            return JsonValue.JsonValueParseError.UnexpectedToken;
+        }
+        const mid_token = (try self.tokens.next()) orelse return null;
+        if (mid_token != .Colon) {
+            return JsonValue.JsonValueParseError.UnexpectedToken;
+        }
+        const value = (try JsonValue.parseFromIterator(&self.tokens)) orelse return null;
+        return JsonObjectPair{
+            .key = key,
+            .value = value,
+        };
+    }
+};
 
 pub const JsonArrayIterator = struct {
-    data: JsonTextIterator,
+    tokens: JsonTokenIterator,
+    first: bool = true,
+
     const Self = @This();
-
-    pub fn next(self: *Self) ?JsonValue {
-        return parseJson(self.data.next() orelse return null);
-    }
-    pub fn reset(self: *Self) void {
-        self.data.reset();
-    }
-    pub fn size(self: *const Self) usize {
-        return self.data.size();
-    }
-    pub fn clone(self: *const Self) Self {
-        return .{
-            .data = self.data.clone(),
-        };
-    }
-};
-
-test "array iterator" {
-    var iter = JsonArrayIterator{
-        .data = JsonTextIterator{ .data = "1, 2, 3, 4" },
-    };
-    try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 1 else unreachable);
-    try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 2 else unreachable);
-    try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 3 else unreachable);
-    try testing.expect(if (iter.next()) |val| val == JsonValue.Number and val.Number == 4 else unreachable);
-    try testing.expect(iter.next() == null);
-    try testing.expect(iter.size() == 4);
-}
-
-pub const JsonObjectKeyValuePair = struct {
-    key: JsonValue,
-    value: JsonValue,
-};
-pub const JsonObjectIterator = struct {
-    data: JsonTextIterator,
-    const Self = @This();
-
-    pub fn next(self: *Self) ?JsonObjectKeyValuePair {
-        const text = self.data.next() orelse return null;
-        const colon_pos = traverseBraces(text, "[{", "]}", ":", "\"'", '\\');
-        if (colon_pos >= text.len) {
+    pub fn next(self: *Self) !?JsonValue {
+        const token = (try self.tokens.peek()) orelse return null;
+        if (token == .CloseBracket) {
             return null;
         }
-        const key_str = text[0..colon_pos];
-        const value_str = text[colon_pos + 1 ..];
-        return JsonObjectKeyValuePair{
-            .key = parseJson(key_str),
-            .value = parseJson(value_str),
-        };
-    }
-    pub fn reset(self: *Self) void {
-        self.data.reset();
-    }
-    pub fn size(self: *const Self) usize {
-        return self.data.size();
-    }
-    pub fn clone(self: *const Self) Self {
-        return .{
-            .data = self.data.clone(),
-        };
+        if (self.first) {
+            self.first = false;
+        } else {
+            if (token == .Comma) {
+                _ = try self.tokens.next();
+            } else {
+                return JsonValue.JsonValueParseError.UnexpectedToken;
+            }
+        }
+        return JsonValue.parseFromIterator(&self.tokens);
     }
 };
-
-test "object iterator" {
-    var iter = JsonObjectIterator{
-        .data = JsonTextIterator{ .data = "\"hello\": \"there\", \"test\": [\"value\"]" },
-    };
-    try testing.expect(if (iter.next()) |pair| pair.key == JsonValue.String and eql(u8, pair.key.String, "hello") and pair.value == JsonValue.String and eql(u8, pair.value.String, "there") else unreachable);
-    try testing.expect(if (iter.next()) |pair| pair.key == JsonValue.String and eql(u8, pair.key.String, "test") and pair.value == JsonValue.Array else unreachable);
-    try testing.expect(iter.next() == null);
-    var iter2 = JsonObjectIterator{
-        .data = JsonTextIterator{ .data = " " },
-    };
-    try testing.expect(iter2.next() == null);
-}
 
 pub const JsonValue = union(enum) {
-    Null: void,
-    Bool: bool,
-    String: []const u8,
-    Number: f64,
-    Array: JsonArrayIterator,
     Object: JsonObjectIterator,
+    Array: JsonArrayIterator,
+    Number: f64,
+    Boolean: bool,
+    String: JsonCharacterIterator,
+    Null,
 
-    const Self = @This();
-    pub fn clone(self: *const Self) Self {
-        return switch (self.*) {
-            .Null => .Null,
-            .Bool => |val| .{ .Bool = val },
-            .String => |val| .{ .String = val },
-            .Number => |val| .{ .Number = val },
-            .Array => |val| .{ .Array = val.clone() },
-            .Object => |val| .{ .Object = val.clone() },
-        };
+    pub const JsonValueParseError = JsonTokenIterator.JsonTokenIteratorError || error{
+        UnexpectedToken,
+    };
+
+    pub fn parseFromText(text: []const u8) !JsonValue {
+        var iter = JsonTokenIterator{ .text = text };
+        return (parseFromIterator(&iter) catch |e| return e) orelse unreachable;
+    }
+    pub fn parseFromIterator(tokens: *JsonTokenIterator) JsonValueParseError!?JsonValue {
+        switch ((try tokens.next()) orelse return null) {
+            .OpenCurly => {
+                const val = JsonValue{ .Object = JsonObjectIterator{ .tokens = tokens.clone() } };
+                try tokens.untilSameLevel();
+                return val;
+            },
+            .OpenBracket => {
+                const val = JsonValue{ .Array = JsonArrayIterator{ .tokens = tokens.clone() } };
+                try tokens.untilSameLevel();
+                return val;
+            },
+            .String => |text| return JsonValue{ .String = JsonCharacterIterator{ .text = text } },
+            .Number => |num| return JsonValue{ .Number = num },
+            .Boolean => |val| return JsonValue{ .Boolean = val },
+            .Null => return JsonValue.Null,
+            else => return JsonValueParseError.UnexpectedToken,
+        }
     }
 };
 
-test "jsonvalue" {
-    var val: JsonValue = .{ .Null = undefined };
-    var val2 = val.clone();
-    _ = val2;
-}
+test "json value parse" {
+    var parsed = try JsonValue.parseFromText(
+        \\{
+        \\  "hi": 5,
+        \\  "there": 6,
+        \\  "person": {
+        \\    "happy": null,
+        \\    "crappy": [
+        \\      5, 4, true
+        \\    ]
+        \\  }
+        \\}
+    );
+    try testing.expect(parsed == .Object);
+    var pair = (try parsed.Object.next()).?;
+    try testing.expect(pair.key == .String and partStrEql(pair.key.String.text, "\"hi\""));
+    try testing.expect(pair.value == .Number and pair.value.Number == 5.0);
+    pair = (try parsed.Object.next()).?;
+    try testing.expect(pair.key == .String and partStrEql(pair.key.String.text, "\"there\""));
+    try testing.expect(pair.value == .Number and pair.value.Number == 6.0);
+    pair = (try parsed.Object.next()).?;
+    try testing.expect(pair.key == .String and partStrEql(pair.key.String.text, "\"person\""));
+    try testing.expect(pair.value == .Object);
+    var obj = pair.value.Object;
+    pair = (try obj.next()).?;
+    try testing.expect(pair.key == .String and partStrEql(pair.key.String.text, "\"happy\""));
+    try testing.expect(pair.value == .Null);
+    pair = (try obj.next()).?;
+    try testing.expect(pair.key == .String and partStrEql(pair.key.String.text, "\"crappy\""));
+    try testing.expect(pair.value == .Array);
+    try testing.expect((try obj.next()) == null);
+    var elem = (try pair.value.Array.next()).?;
+    try testing.expect(elem.Number == 5.0);
+    elem = (try pair.value.Array.next()).?;
+    try testing.expect(elem.Number == 4.0);
+    elem = (try pair.value.Array.next()).?;
+    try testing.expect(elem.Boolean == true);
+    try testing.expect((try pair.value.Array.next()) == null);
 
-/// given the provided text, parse json into a JsonValue
-pub fn parseJson(json_str: []const u8) JsonValue {
-    var trimmed_str = mem.trim(u8, json_str, ascii.spaces[0..]);
-    if (eql(u8, trimmed_str, "null")) {
-        return .Null;
-    } else if (eql(u8, trimmed_str, "true")) {
-        return .{ .Bool = true };
-    } else if (eql(u8, trimmed_str, "false")) {
-        return .{ .Bool = false };
-    } else if (trimmed_str[0] == '"') {
-        return .{ .String = trimmed_str[1 .. trimmed_str.len - 1] };
-    } else if (trimmed_str[0] == '[') {
-        return .{ .Array = JsonArrayIterator{ .data = JsonTextIterator{ .data = trimmed_str[1 .. trimmed_str.len - 1] } } };
-    } else if (trimmed_str[0] == '{') {
-        return .{ .Object = JsonObjectIterator{ .data = JsonTextIterator{ .data = trimmed_str[1 .. trimmed_str.len - 1] } } };
-    } else {
-        const parsed_int = std.fmt.parseInt(i64, trimmed_str, 0) catch {
-            const parsed_float = std.fmt.parseFloat(f64, trimmed_str) catch return .Null;
-            return .{ .Number = parsed_float };
-        };
-        return .{ .Number = @intToFloat(f64, parsed_int) };
-    }
-    return .Null;
+    try testing.expect((try parsed.Object.next()) == null);
 }
